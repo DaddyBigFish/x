@@ -44,7 +44,7 @@ button:hover{background:var(--ac2)}
     <input id="pw" type="password" placeholder="password">
     <button id="go">Open</button>
     <div id="err"></div>
-    <p style="margin:14px 0 0;font-size:11px;color:#555">v5 · multi-broker</p>
+    <p style="margin:14px 0 0;font-size:11px;color:#555">v6 · multi-broker</p>
   </div>
 </div>
 <div id="wait" hidden>
@@ -52,6 +52,7 @@ button:hover{background:var(--ac2)}
     <h1>Waiting...</h1>
     <p>Room <b id="wroom"></b> is open. The notepad unlocks when the other side joins with the same password.</p>
     <p id="wst" style="font-size:12px;color:var(--mut)"></p>
+    <p id="whint" style="font-size:12px;color:#e0af68" hidden>Still alone after 20s? Check the note name + password are typed identically on both sides (a wrong password silently opens a different empty room).</p>
   </div>
 </div>
 <div id="app" hidden>
@@ -79,8 +80,8 @@ async function unlock(){
   if(typeof mqtt==='undefined'){$('err').textContent='MQTT lib failed to load: CDN blocked by network/adblock.';return}
   $('err').textContent='';
   const km=await crypto.subtle.importKey('raw',TE.encode(pw),'PBKDF2',false,['deriveKey']);
-  key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:TE.encode('livepad-v1'),iterations:120000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
-  const h=new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode('livepad-room:'+nm+':'+pw)));
+  key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:TE.encode('livepad-v2'),iterations:600000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  const h=new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode('livepad-room2:'+nm+':'+pw)));
   const hex=[...h].map(x=>x.toString(16).padStart(2,'0')).join('').slice(0,20);
   topic='livepad/'+hex;
   $('lock').hidden=true;showWait();
@@ -88,6 +89,7 @@ async function unlock(){
   try{const d=localStorage.getItem(topic);if(d)ed.value=await dec(d)}catch(_){}
   meta();connectAll();
   setInterval(gate,10000);
+  setTimeout(()=>{if(!$('wait').hidden)$('whint').hidden=false},20000);
 }
 
 function connectAll(){
