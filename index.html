@@ -50,6 +50,7 @@ button:hover{background:var(--ac2)}
   <div class="card" style="text-align:center">
     <h1>Waiting...</h1>
     <p>Room <b id="wroom"></b> is open. The notepad unlocks when the other side joins with the same password.</p>
+    <p id="wst" style="font-size:12px;color:var(--mut)"></p>
   </div>
 </div>
 <div id="app" hidden>
@@ -60,7 +61,10 @@ button:hover{background:var(--ac2)}
 <script>
 const $=i=>document.getElementById(i),TE=new TextEncoder(),TD=new TextDecoder(),ed=$('ed');
 let key,room,isHost=false,peer,conns=new Set(),pt,sv,opened=false;
-const CFG={host:'0.peerjs.com',port:443,secure:true,path:'/'};
+const CFG={host:'0.peerjs.com',port:443,secure:true,path:'/',config:{iceServers:[
+  {urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302']},
+  {urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}
+]}};
 const b64=b=>{let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s)};
 const ub=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 const enc=async t=>{const iv=crypto.getRandomValues(new Uint8Array(12));const c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,TE.encode(t)));const b=new Uint8Array(12+c.length);b.set(iv);b.set(c,12);return b64(b)};
@@ -115,6 +119,7 @@ function wire(c){
   });
   const bye=()=>{conns.delete(c);status();
     if(![...conns].some(x=>x.open)){showWait();if(!isHost){try{peer.destroy()}catch(_){}setTimeout(beHost,800)}}};
+  c.on('iceStateChanged',s=>{if(![...conns].some(x=>x.open))$('wst').textContent='ice: '+s});
   c.on('close',bye);c.on('error',bye);
 }
 
@@ -139,7 +144,9 @@ ed.addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();ed.setRan
 async function push(){cast({t:'u',d:await enc(ed.value)})}
 function save(){clearTimeout(sv);sv=setTimeout(async()=>{try{localStorage.setItem(room,await enc(ed.value))}catch(_){}},250)}
 function status(m){const n=[...conns].filter(c=>c.open).length;
-  $('st').innerHTML=m||`<span class="dot ${isHost||n?'on':''}"></span>${isHost?'hosting':'joined'} room <b>${room.slice(3,11)}</b> &middot; ${n} peer${n===1?'':'s'}`}
+  const s=m||`${isHost?'hosting':'joined'} room ${room.slice(3,11)} \u00b7 ${n} peer${n===1?'':'s'}`;
+  $('st').innerHTML=m?m:`<span class="dot ${isHost||n?'on':''}"></span>${s}`;
+  $('wst').textContent=s}
 function meta(){const v=ed.value.trim(),w=v?v.split(/\s+/).length:0;$('meta').textContent=`${w} word${w===1?'':'s'}`}
 $('go').onclick=unlock;
 $('pw').addEventListener('keydown',e=>{if(e.key==='Enter')unlock()});
