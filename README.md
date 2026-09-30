@@ -5,7 +5,7 @@ A single-file, password-gated, live collaborative notepad with an Obsidian dark 
 ## How it works
 
 - No backend and no accounts. Sync is relayed over encrypted websockets (port 443) via public MQTT brokers, which works on networks that block WebRTC/P2P.
-- The password (plus optional note name) derives the room topic and an AES-GCM key (PBKDF2, 120k iterations). All note traffic is end-to-end encrypted; the broker and anyone without the password see only ciphertext.
+- The password (plus optional note name) derives the room topic and an AES-GCM key (PBKDF2, 600k iterations). All note traffic is end-to-end encrypted; the broker and anyone without the password see only ciphertext.
 - The editor unlocks only when at least one other live participant is in the room (mutual presence), and goes back to waiting if everyone leaves.
 - The broker retains the last encrypted state, so a late joiner gets the current note even if the other side has since gone offline. Each browser also keeps an encrypted copy in localStorage.
 
