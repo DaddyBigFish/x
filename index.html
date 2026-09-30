@@ -44,7 +44,7 @@ button:hover{background:var(--ac2)}
     <input id="pw" type="password" placeholder="password">
     <button id="go">Open</button>
     <div id="err"></div>
-    <p style="margin:14px 0 0;font-size:11px;color:#555">v4 · mqtt</p>
+    <p style="margin:14px 0 0;font-size:11px;color:#555">v5 · multi-broker</p>
   </div>
 </div>
 <div id="wait" hidden>
@@ -61,9 +61,12 @@ button:hover{background:var(--ac2)}
 </div>
 <script>
 const $=i=>document.getElementById(i),TE=new TextEncoder(),TD=new TextDecoder(),ed=$('ed');
-let key,topic,mq,pt,sv,peers=new Map(),up=false;
+let key,topic,pt,sv,peers=new Map(),mqs=[],seq=0;
 const myId='lp-'+Math.random().toString(16).slice(2,10);
-const BROKERS=['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt','wss://test.mosquitto.org:8081/mqtt'];
+const seen=new Set();
+const ALLB=['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt','wss://test.mosquitto.org:8081/mqtt'];
+const qb=new URLSearchParams(location.search).get('b');
+const BROKERS=qb&&ALLB.some(u=>u.includes(qb))?ALLB.filter(u=>u.includes(qb)):ALLB;
 const b64=b=>{let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s)};
 const ub=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 const enc=async t=>{const iv=crypto.getRandomValues(new Uint8Array(12));const c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,TE.encode(t)));const b=new Uint8Array(12+c.length);b.set(iv);b.set(c,12);return b64(b)};
@@ -83,30 +86,32 @@ async function unlock(){
   $('lock').hidden=true;showWait();
   $('wroom').textContent=hex.slice(0,8);
   try{const d=localStorage.getItem(topic);if(d)ed.value=await dec(d)}catch(_){}
-  meta();tryBroker(0);
+  meta();connectAll();
   setInterval(gate,10000);
 }
 
-function tryBroker(i){
-  if(i>=BROKERS.length){status('all sync brokers unreachable (network blocking websockets)');return}
-  status('connecting '+BROKERS[i].split('/')[2]+'...');
-  let wasUp=false;
-  const c=mqtt.connect(BROKERS[i],{clientId:myId,connectTimeout:7000,reconnectPeriod:0,keepalive:30,
-    will:{topic,payload:JSON.stringify({t:'bye',from:myId})}});
-  const to=setTimeout(()=>{if(!wasUp){try{c.end(true)}catch(_){}tryBroker(i+1)}},9000);
-  c.on('connect',()=>{wasUp=true;up=true;clearTimeout(to);mq=c;
-    mq.subscribe(topic,{qos:0});pub({t:'hi'});status();
-    setInterval(()=>pub({t:'hb'}),15000)});
-  c.on('message',(tp,pl)=>onMsg(pl));
-  c.on('close',()=>{if(wasUp){up=false;status('disconnected, reconnecting...');setTimeout(()=>tryBroker(0),2000)}});
-  c.on('error',()=>{});
+function connectAll(){
+  BROKERS.forEach((url,i)=>{
+    const host=url.split('/')[2];
+    const c=mqtt.connect(url,{clientId:myId+'-'+i,connectTimeout:7000,reconnectPeriod:4000,keepalive:30,
+      will:{topic,payload:JSON.stringify({t:'bye',from:myId,id:myId+':w'+i})}});
+    c.on('connect',()=>{c._host=host;mqs.push(c);c.subscribe(topic,{qos:0});
+      c.publish(topic,JSON.stringify({t:'hi',from:myId,id:myId+':'+(++seq)}));status()});
+    c.on('message',(tp,pl)=>onMsg(pl));
+    c.on('close',()=>{const j=mqs.indexOf(c);if(j>-1)mqs.splice(j,1);status()});
+    c.on('error',()=>{});
+  });
+  setInterval(()=>pub({t:'hb'}),15000);
 }
 
-function pub(m){m.from=myId;try{mq.publish(topic,JSON.stringify(m),{qos:0,retain:m.t==='u'&&!m.r})}catch(_){}}
+function pub(m){m.from=myId;m.id=myId+':'+(++seq);
+  for(const c of mqs)try{c.publish(topic,JSON.stringify(m),{qos:0,retain:m.t==='u'&&!m.r})}catch(_){}}
 
 async function onMsg(pl){
   let m;try{m=JSON.parse(pl.toString())}catch(_){return}
   if(!m||m.from===myId)return;
+  if(m.id){if(seen.has(m.id))return;seen.add(m.id);
+    if(seen.size>800)seen.delete(seen.values().next().value)}
   if(m.t==='bye'){peers.delete(m.from);gate();return}
   if(m.t==='hi'||m.t==='hb'){peers.set(m.from,Date.now());gate();
     if(m.t==='hi'){pub({t:'hb'});if(ed.value)pub({t:'u',d:await enc(ed.value),r:1})}return}
@@ -131,11 +136,12 @@ function applyRemote(t){
 
 ed.addEventListener('input',()=>{meta();save();clearTimeout(pt);pt=setTimeout(push,120)});
 ed.addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();ed.setRangeText('  ',ed.selectionStart,ed.selectionEnd,'end');ed.dispatchEvent(new Event('input'))}});
-async function push(){if(up)pub({t:'u',d:await enc(ed.value)})}
+async function push(){pub({t:'u',d:await enc(ed.value)})}
 function save(){clearTimeout(sv);sv=setTimeout(async()=>{try{localStorage.setItem(topic,await enc(ed.value))}catch(_){}},250)}
 function status(m){const n=livePeers();
-  const s=m||`${up?'connected':'connecting'} · room ${topic.split('/')[1].slice(0,8)} · ${n} peer${n===1?'':'s'}`;
-  $('st').innerHTML=m?m:`<span class="dot ${up&&n?'on':''}"></span>${s}`;
+  const h=mqs.map(c=>c._host.split(':')[0]).join('+')||'no broker';
+  const s=m||`${h} · room ${topic.split('/')[1].slice(0,8)} · ${n} peer${n===1?'':'s'}`;
+  $('st').innerHTML=m?m:`<span class="dot ${n?'on':''}"></span>${s}`;
   $('wst').textContent=s}
 function meta(){const v=ed.value.trim(),w=v?v.split(/\s+/).length:0;$('meta').textContent=`${w} word${w===1?'':'s'}`}
 $('go').onclick=unlock;
