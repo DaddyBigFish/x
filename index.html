@@ -44,6 +44,7 @@ button:hover{background:var(--ac2)}
     <input id="pw" type="password" placeholder="password">
     <button id="go">Open</button>
     <div id="err"></div>
+    <p style="margin:14px 0 0;font-size:11px;color:#555">v4 · mqtt</p>
   </div>
 </div>
 <div id="wait" hidden>
@@ -62,7 +63,7 @@ button:hover{background:var(--ac2)}
 const $=i=>document.getElementById(i),TE=new TextEncoder(),TD=new TextDecoder(),ed=$('ed');
 let key,topic,mq,pt,sv,peers=new Map(),up=false;
 const myId='lp-'+Math.random().toString(16).slice(2,10);
-const BROKERS=['wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'];
+const BROKERS=['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt','wss://test.mosquitto.org:8081/mqtt'];
 const b64=b=>{let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s)};
 const ub=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 const enc=async t=>{const iv=crypto.getRandomValues(new Uint8Array(12));const c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,TE.encode(t)));const b=new Uint8Array(12+c.length);b.set(iv);b.set(c,12);return b64(b)};
