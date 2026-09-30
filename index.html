@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#1e1e1e">
 <title>LivePad</title>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>if(typeof Peer==='undefined')document.write('<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <style>
 :root{--bg:#1e1e1e;--bg2:#161616;--fg:#dcddde;--mut:#8a8a8a;--ac:#7f6df2;--ac2:#a294fd;--bd:#2b2b2b}
 *{box-sizing:border-box}
@@ -50,7 +51,8 @@ button:hover{background:var(--ac2)}
 </div>
 <script>
 const $=i=>document.getElementById(i),TE=new TextEncoder(),TD=new TextDecoder(),ed=$('ed');
-let key,room,isHost=false,peer,conns=new Set(),pt,sv;
+let key,room,isHost=false,peer,conns=new Set(),pt,sv,opened=false;
+const CFG={host:'0.peerjs.com',port:443,secure:true,path:'/'};
 const b64=b=>{let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s)};
 const ub=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 const enc=async t=>{const iv=crypto.getRandomValues(new Uint8Array(12));const c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,TE.encode(t)));const b=new Uint8Array(12+c.length);b.set(iv);b.set(c,12);return b64(b)};
@@ -61,6 +63,7 @@ async function unlock(){
   if(!pw)return;
   if(!crypto.subtle){$('err').textContent='Needs HTTPS (or localhost).';return}
   $('err').textContent='';
+  if(typeof Peer==='undefined'){$('err').textContent='PeerJS failed to load: CDN blocked by network/adblock.';return}
   const km=await crypto.subtle.importKey('raw',TE.encode(pw),'PBKDF2',false,['deriveKey']);
   key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:TE.encode('livepad-v1'),iterations:120000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
   const h=new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode('livepad-room:'+nm+':'+pw)));
@@ -68,25 +71,26 @@ async function unlock(){
   $('lock').hidden=true;$('app').hidden=false;ed.focus();
   try{const d=localStorage.getItem(room);if(d)ed.value=await dec(d)}catch(_){}
   meta();beHost();
+  setTimeout(()=>{if(!opened)status('cannot reach broker 0.peerjs.com (network/adblock blocking websockets?)')},9000);
 }
 
 function beHost(){
   isHost=true;
-  peer=new Peer(room);
-  peer.on('open',()=>status());
+  peer=new Peer(room,CFG);
+  peer.on('open',()=>{opened=true;status()});
   peer.on('connection',wire);
   peer.on('disconnected',()=>{try{peer.reconnect()}catch(_){}});
   peer.on('error',e=>{
     if(e.type==='unavailable-id'){isHost=false;try{peer.destroy()}catch(_){}beGuest()}
-    else status('reconnecting...');
+    else status('error: '+e.type);
   });
 }
 
 function beGuest(){
-  peer=new Peer();
-  peer.on('open',()=>{const c=peer.connect(room,{reliable:true});wire(c);c.on('open',()=>c.send({t:'hi'}))});
+  peer=new Peer(CFG);
+  peer.on('open',()=>{opened=true;const c=peer.connect(room,{reliable:true});wire(c);c.on('open',()=>c.send({t:'hi'}))});
   peer.on('disconnected',()=>{try{peer.reconnect()}catch(_){}});
-  peer.on('error',e=>{if(e.type==='peer-unavailable'){try{peer.destroy()}catch(_){}setTimeout(beHost,600)}});
+  peer.on('error',e=>{if(e.type==='peer-unavailable'){try{peer.destroy()}catch(_){}setTimeout(beHost,600)}else status('error: '+e.type)});
 }
 
 function wire(c){
