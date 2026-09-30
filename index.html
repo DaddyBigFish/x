@@ -12,7 +12,7 @@
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 [hidden]{display:none!important}
-#lock{display:flex;height:100%;align-items:center;justify-content:center;padding:16px}
+#lock,#wait{display:flex;height:100%;align-items:center;justify-content:center;padding:16px}
 .card{background:#252526;border:1px solid var(--bd);border-radius:8px;padding:28px;width:330px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
 .card h1{margin:0 0 4px;font-size:20px;font-weight:600}
 .card p{margin:0 0 16px;color:var(--mut);font-size:13px}
@@ -21,6 +21,8 @@ input:focus{border-color:var(--ac)}
 #pw{margin-top:8px}
 button{width:100%;margin-top:12px;background:var(--ac);color:#fff;border:0;border-radius:6px;padding:9px;font-size:14px;font-weight:600;cursor:pointer}
 button:hover{background:var(--ac2)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+#wait h1{animation:pulse 1.6s infinite}
 #err{color:#e06c75;font-size:12.5px;margin-top:10px;min-height:16px}
 #app{display:flex;flex-direction:column;height:100%}
 #ed{flex:1;width:100%;resize:none;border:0;outline:0;background:var(--bg);color:var(--fg);padding:32px max(20px,calc(50% - 380px));font:15px/1.7 ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;caret-color:var(--ac2)}
@@ -42,6 +44,12 @@ button:hover{background:var(--ac2)}
     <input id="pw" type="password" placeholder="password">
     <button id="go">Open</button>
     <div id="err"></div>
+  </div>
+</div>
+<div id="wait" hidden>
+  <div class="card" style="text-align:center">
+    <h1>Waiting...</h1>
+    <p>Room <b id="wroom"></b> is open. The notepad unlocks when the other side joins with the same password.</p>
   </div>
 </div>
 <div id="app" hidden>
@@ -68,7 +76,8 @@ async function unlock(){
   key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:TE.encode('livepad-v1'),iterations:120000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
   const h=new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode('livepad-room:'+nm+':'+pw)));
   room='lp-'+[...h].map(x=>x.toString(16).padStart(2,'0')).join('').slice(0,20);
-  $('lock').hidden=true;$('app').hidden=false;ed.focus();
+  $('lock').hidden=true;showWait();
+  $('wroom').textContent=room.slice(3,11);
   try{const d=localStorage.getItem(room);if(d)ed.value=await dec(d)}catch(_){}
   meta();beHost();
   setTimeout(()=>{if(!opened)status('cannot reach broker 0.peerjs.com (network/adblock blocking websockets?)')},9000);
@@ -94,7 +103,7 @@ function beGuest(){
 }
 
 function wire(c){
-  c.on('open',async()=>{conns.add(c);status();if(isHost&&ed.value)c.send({t:'u',d:await enc(ed.value)})});
+  c.on('open',async()=>{conns.add(c);status();showApp();if(isHost&&ed.value)c.send({t:'u',d:await enc(ed.value)})});
   c.on('data',async m=>{
     if(!m)return;
     if(m.t==='hi'){if(isHost)c.send(ed.value?{t:'u',d:await enc(ed.value)}:{t:'req'});return}
@@ -105,12 +114,14 @@ function wire(c){
     if(isHost)cast(m,c);
   });
   const bye=()=>{conns.delete(c);status();
-    if(!isHost&&![...conns].some(x=>x.open)){try{peer.destroy()}catch(_){}setTimeout(beHost,800)}};
+    if(![...conns].some(x=>x.open)){showWait();if(!isHost){try{peer.destroy()}catch(_){}setTimeout(beHost,800)}}};
   c.on('close',bye);c.on('error',bye);
 }
 
 function cast(m,ex){for(const c of conns)if(c!==ex&&c.open)try{c.send(m)}catch(_){}}
-function badPw(){if(isHost)return;try{peer.destroy()}catch(_){}$('app').hidden=true;$('lock').hidden=false;$('err').textContent='Wrong password (decryption failed).'}
+function showWait(){$('wait').hidden=false;$('app').hidden=true}
+function showApp(){$('wait').hidden=true;$('app').hidden=false;ed.focus()}
+function badPw(){if(isHost)return;try{peer.destroy()}catch(_){}$('app').hidden=true;$('wait').hidden=true;$('lock').hidden=false;$('err').textContent='Wrong password (decryption failed).'}
 
 function applyRemote(t){
   if(ed.value===t)return;
