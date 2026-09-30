@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1e1e1e">
+<title>LivePad</title>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+:root{--bg:#1e1e1e;--bg2:#161616;--fg:#dcddde;--mut:#8a8a8a;--ac:#7f6df2;--ac2:#a294fd;--bd:#2b2b2b}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+[hidden]{display:none!important}
+#lock{display:flex;height:100%;align-items:center;justify-content:center;padding:16px}
+.card{background:#252526;border:1px solid var(--bd);border-radius:8px;padding:28px;width:330px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+.card h1{margin:0 0 4px;font-size:20px;font-weight:600}
+.card p{margin:0 0 16px;color:var(--mut);font-size:13px}
+input{width:100%;background:#1a1a1a;border:1px solid var(--bd);color:var(--fg);border-radius:6px;padding:9px 11px;font-size:14px;outline:none}
+input:focus{border-color:var(--ac)}
+#pw{margin-top:8px}
+button{width:100%;margin-top:12px;background:var(--ac);color:#fff;border:0;border-radius:6px;padding:9px;font-size:14px;font-weight:600;cursor:pointer}
+button:hover{background:var(--ac2)}
+#err{color:#e06c75;font-size:12.5px;margin-top:10px;min-height:16px}
+#app{display:flex;flex-direction:column;height:100%}
+#ed{flex:1;width:100%;resize:none;border:0;outline:0;background:var(--bg);color:var(--fg);padding:32px max(20px,calc(50% - 380px));font:15px/1.7 ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;caret-color:var(--ac2)}
+#ed::selection{background:rgba(127,109,242,.35)}
+#ed::placeholder{color:#555}
+#bar{display:flex;justify-content:space-between;gap:12px;background:var(--bg2);border-top:1px solid var(--bd);color:var(--mut);font-size:12px;padding:4px 12px;white-space:nowrap}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#555;margin-right:6px}
+.dot.on{background:#98c379}
+#lk{position:fixed;top:10px;right:12px;background:none;border:0;color:var(--mut);cursor:pointer;font-size:15px;opacity:.55;width:auto;padding:4px}
+#lk:hover{opacity:1;color:var(--fg)}
+</style>
+</head>
+<body>
+<div id="lock">
+  <div class="card">
+    <h1>LivePad</h1>
+    <p>Shared live notepad. Same password + note name opens the same room.</p>
+    <input id="name" placeholder="note name (optional)" autocomplete="off">
+    <input id="pw" type="password" placeholder="password">
+    <button id="go">Open</button>
+    <div id="err"></div>
+  </div>
+</div>
+<div id="app" hidden>
+  <button id="lk" title="lock">&#128274;</button>
+  <textarea id="ed" spellcheck="false" placeholder="Start typing..."></textarea>
+  <div id="bar"><span id="st">connecting...</span><span id="meta">0 words</span></div>
+</div>
+<script>
+const $=i=>document.getElementById(i),TE=new TextEncoder(),TD=new TextDecoder(),ed=$('ed');
+let key,room,isHost=false,peer,conns=new Set(),pt,sv;
+const b64=b=>{let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(s)};
+const ub=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const enc=async t=>{const iv=crypto.getRandomValues(new Uint8Array(12));const c=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,TE.encode(t)));const b=new Uint8Array(12+c.length);b.set(iv);b.set(c,12);return b64(b)};
+const dec=async s=>{const b=ub(s);return TD.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:b.slice(0,12)},key,b.slice(12)))};
+
+async function unlock(){
+  const pw=$('pw').value,nm=$('name').value.trim()||'default';
+  if(!pw)return;
+  if(!crypto.subtle){$('err').textContent='Needs HTTPS (or localhost).';return}
+  $('err').textContent='';
+  const km=await crypto.subtle.importKey('raw',TE.encode(pw),'PBKDF2',false,['deriveKey']);
+  key=await crypto.subtle.deriveKey({name:'PBKDF2',salt:TE.encode('livepad-v1'),iterations:120000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  const h=new Uint8Array(await crypto.subtle.digest('SHA-256',TE.encode('livepad-room:'+nm+':'+pw)));
+  room='lp-'+[...h].map(x=>x.toString(16).padStart(2,'0')).join('').slice(0,20);
+  $('lock').hidden=true;$('app').hidden=false;ed.focus();
+  try{const d=localStorage.getItem(room);if(d)ed.value=await dec(d)}catch(_){}
+  meta();beHost();
+}
+
+function beHost(){
+  isHost=true;
+  peer=new Peer(room);
+  peer.on('open',()=>status());
+  peer.on('connection',wire);
+  peer.on('disconnected',()=>{try{peer.reconnect()}catch(_){}});
+  peer.on('error',e=>{
+    if(e.type==='unavailable-id'){isHost=false;try{peer.destroy()}catch(_){}beGuest()}
+    else status('reconnecting...');
+  });
+}
+
+function beGuest(){
+  peer=new Peer();
+  peer.on('open',()=>{const c=peer.connect(room,{reliable:true});wire(c);c.on('open',()=>c.send({t:'hi'}))});
+  peer.on('disconnected',()=>{try{peer.reconnect()}catch(_){}});
+  peer.on('error',e=>{if(e.type==='peer-unavailable'){try{peer.destroy()}catch(_){}setTimeout(beHost,600)}});
+}
+
+function wire(c){
+  c.on('open',async()=>{conns.add(c);status();if(isHost&&ed.value)c.send({t:'u',d:await enc(ed.value)})});
+  c.on('data',async m=>{
+    if(!m)return;
+    if(m.t==='hi'){if(isHost)c.send(ed.value?{t:'u',d:await enc(ed.value)}:{t:'req'});return}
+    if(m.t==='req'){cast({t:'u',d:await enc(ed.value)});return}
+    if(m.t!=='u')return;
+    let t;try{t=await dec(m.d)}catch(_){return badPw()}
+    applyRemote(t);save();
+    if(isHost)cast(m,c);
+  });
+  const bye=()=>{conns.delete(c);status();
+    if(!isHost&&![...conns].some(x=>x.open)){try{peer.destroy()}catch(_){}setTimeout(beHost,800)}};
+  c.on('close',bye);c.on('error',bye);
+}
+
+function cast(m,ex){for(const c of conns)if(c!==ex&&c.open)try{c.send(m)}catch(_){}}
+function badPw(){if(isHost)return;try{peer.destroy()}catch(_){}$('app').hidden=true;$('lock').hidden=false;$('err').textContent='Wrong password (decryption failed).'}
+
+function applyRemote(t){
+  if(ed.value===t)return;
+  const o=ed.value,s=ed.selectionStart,e=ed.selectionEnd,sc=ed.scrollTop;
+  let p=0;while(p<o.length&&p<t.length&&o[p]===t[p])p++;
+  let x=0;while(x<o.length-p&&x<t.length-p&&o[o.length-1-x]===t[t.length-1-x])x++;
+  const adj=v=>v<=p?v:v>=o.length-x?t.length-(o.length-v):p;
+  ed.value=t;
+  try{ed.selectionStart=Math.min(adj(s),t.length);ed.selectionEnd=Math.min(adj(e),t.length)}catch(_){}
+  ed.scrollTop=sc;meta();
+}
+
+ed.addEventListener('input',()=>{meta();save();clearTimeout(pt);pt=setTimeout(push,120)});
+ed.addEventListener('keydown',e=>{if(e.key==='Tab'){e.preventDefault();ed.setRangeText('  ',ed.selectionStart,ed.selectionEnd,'end');ed.dispatchEvent(new Event('input'))}});
+async function push(){cast({t:'u',d:await enc(ed.value)})}
+function save(){clearTimeout(sv);sv=setTimeout(async()=>{try{localStorage.setItem(room,await enc(ed.value))}catch(_){}},250)}
+function status(m){const n=[...conns].filter(c=>c.open).length;
+  $('st').innerHTML=m||`<span class="dot ${isHost||n?'on':''}"></span>${isHost?'hosting':'joined'} room <b>${room.slice(3,11)}</b> &middot; ${n} peer${n===1?'':'s'}`}
+function meta(){const v=ed.value.trim(),w=v?v.split(/\s+/).length:0;$('meta').textContent=`${w} word${w===1?'':'s'}`}
+$('go').onclick=unlock;
+$('pw').addEventListener('keydown',e=>{if(e.key==='Enter')unlock()});
+$('name').addEventListener('keydown',e=>{if(e.key==='Enter')unlock()});
+$('lk').onclick=()=>location.reload();
+</script>
+</body>
+</html>
