@@ -4,11 +4,10 @@ A single-file, password-gated, live collaborative notepad with an Obsidian dark 
 
 ## How it works
 
-- No backend and no accounts. Sync is peer-to-peer over WebRTC via the free public PeerJS broker.
-- The password (plus optional note name) derives the room ID and an AES-GCM key (PBKDF2, 120k iterations). All note traffic is end-to-end encrypted; the broker and anyone without the password see only ciphertext.
-- First person online hosts the room. Others with the password join it. Both sides edit live.
-- If the host leaves, another open client automatically takes over hosting. Each browser also keeps an encrypted copy in localStorage.
-- Wrong password: decryption fails and the user is bounced back to the lock screen.
+- No backend and no accounts. Sync is relayed over encrypted websockets (port 443) via public MQTT brokers, which works on networks that block WebRTC/P2P.
+- The password (plus optional note name) derives the room topic and an AES-GCM key (PBKDF2, 120k iterations). All note traffic is end-to-end encrypted; the broker and anyone without the password see only ciphertext.
+- The editor unlocks only when at least one other live participant is in the room (mutual presence), and goes back to waiting if everyone leaves.
+- The broker retains the last encrypted state, so a late joiner gets the current note even if the other side has since gone offline. Each browser also keeps an encrypted copy in localStorage.
 
 ## Deploy to GitHub Pages
 
@@ -39,6 +38,6 @@ Then enable Pages as above.
 
 ## Notes and limits
 
-- All sync is P2P: at least one participant must have the page open for the room to be reachable. If you open it alone later, your last locally saved copy is there and you become the host.
+- Sync rides free public MQTT brokers (broker.emqx.io, test.mosquitto.org). Fine for a notepad; do not treat them as guaranteed infrastructure.
 - Not end-to-end audited; use a strong password. Anyone with the password can read and edit.
-- One room hosts one note. Use different note names for multiple pads.
+- One room is one note. Use different note names for multiple pads.
